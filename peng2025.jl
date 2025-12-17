@@ -425,7 +425,7 @@ end
 
 vperpGyro = sqrt.(1 .- vpGyro.^2) # 计算每个gyro period的平均垂直速度
 # Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
-Reff = k * bGyroNorm.^3 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
 # Reff = k^2 * bGyroNorm.^2 ./ kz ./ kx # 计算每个gyro period的有效曲率半径
 # Reff = bGyroNorm.^3 ./ kz ./bw
 # Reff = bGyroNorm.^2 ./ kz ./bw
