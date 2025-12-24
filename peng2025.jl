@@ -152,10 +152,267 @@ plot(p1,p3,cb1, layout=l,
 dpi = 1200,
 size = (800, 380),
 )
-savefig("figure/PRL/lyapunov_bw_kx.png")
+savefig("figure/lyapunov_bw_kx.png")
+
+#######################################################
+# 2. fig2 Lyapunov exponent in two-dimensional state space
+#######################################################
+using Plots
+using Plots.PlotMeasures
+
+r=1;
+theta = range(0., pi, length=256); # Initial phase
+phi = 0
+Nϕ = 256
+ϕ = range(0., 2*pi, length=Nϕ); # Initial phase
+Δt = 0.025
+lyapunov_T = 10000
+Ttr=100;
+kx = 0.5 # Base kx
+kz = 0.25 # Base kz
+u0s = [[ϕi, r*sin(thetai)*cos(phi),
+      r*sin(thetai)*sin(phi), r*cos(thetai)] for ϕi in ϕ for thetai in theta] # ψ x y z
+
+# bw = 0.45;
+bws = 0.01:0.01:1.;
+λs = zeros(length(bws), length(theta), Nϕ) # Lyapunov exponent
+# λlocal = zeros(length(theta), Nϕ) # local growth rate
+# P = zeros(length(theta), Nϕ) # Rc/rho
+# μ = zeros(length(theta), Nϕ) # magnetic moment
+
+p0 =  [bws[1], kx, kz] # Parameters bw kx kz t1 t2 τ
+cpaw = CoupledODEs(cpaw_rule, u0s[1], p0; diffeq)
+systems = [deepcopy(cpaw) for _ in 1:Threads.nthreads()-1]
+pushfirst!(systems, cpaw)
+
+for (bw_i,bw) in enumerate(bws)
+for i in eachindex(theta)
+    Threads.@threads for j in eachindex(ϕ)
+        u0 = [ϕ[j], r*sin(theta[i])*cos(phi),
+              r*sin(theta[i])*sin(phi), r*cos(theta[i])]
+        system = systems[Threads.threadid()]
+        set_parameter!(system, 1, bw)
+        λs[bw_i,i,j] = lyapunov(system, lyapunov_T; Ttr = Ttr, u0=u0)
+        # λlocal[i,j] = mean(local_growth_rates(cpaw, StateSpaceSet([u0]); Δt = 2pi))
+        # bs = vec(B_cpaw([u0[1],], p0)) # 计算磁场
+        # bNorms = norm(bs) # 计算磁场的模
+        # v_parallel = sum(u0[2:4].*bs)/bNorms # 计算平行速度
+        # v_perp = sqrt(1 - v_parallel^2) # 计算垂直速度
+        # μ[i,j] = 0.5 * (1 - v_parallel^2) / bNorms # 计算磁矩
+        # P[i,j] = bNorms^3 / (bw*kz*v_perp)
+    end
+end
+@info "Finished bw_i=$bw_i"
+end
+
+filename = "data/singleParticle/chaosBorder_bw.jld2"
+save(filename, "bws", bws, "ϕ", ϕ, "theta", theta, "λs", λs, "kx", kx, "kz", kz)
+
+
+
+############ 研究状态空间中混沌区域随速度v的变化，方便后续热等离子的研究 ############
+using Plots
+using Plots.PlotMeasures
+
+rs=0.05:0.05:1.5;
+theta = range(0., pi, length=256); # Initial phase
+phi = 0
+Nϕ = 256
+ϕ = range(0., 2*pi, length=Nϕ); # Initial phase
+Δt = 0.025
+lyapunov_T = 10000
+Ttr=100;
+kx = 0.5 # Base kx
+kz = 0.25 # Base kz
+bw = 0.3;
+u0 = [ϕ[1], rs[1]*sin(theta[1])*cos(phi),
+      rs[1]*sin(theta[1])*sin(phi), rs[1]*cos(theta[1])]
+
+λs = zeros(length(rs), length(theta), Nϕ) # Lyapunov exponent
+
+p0 =  [bw, kx, kz] # Parameters bw kx kz t1 t2 τ
+cpaw = CoupledODEs(cpaw_rule, u0, p0; diffeq)
+systems = [deepcopy(cpaw) for _ in 1:Threads.nthreads()-1]
+pushfirst!(systems, cpaw)
+
+for (r_i,r) in enumerate(rs)
+for i in eachindex(theta)
+    Threads.@threads for j in eachindex(ϕ)
+        u0 = [ϕ[j], r*sin(theta[i])*cos(phi),
+              r*sin(theta[i])*sin(phi), r*cos(theta[i])]
+        system = systems[Threads.threadid()]
+        λs[r_i,i,j] = lyapunov(system, lyapunov_T; Ttr = Ttr, u0=u0)
+    end
+end
+@info "Finished v_i=$r_i"
+end
+
+filename = "data/singleParticle/chaosBorder_v.jld2"
+save(filename, "bw", bw, "ϕ", ϕ, "theta", theta, "λs", λs, "kx", kx, "kz", kz, "rs", rs)
+
+@load "data/singleParticle/chaosBorder_bw.jld2" bws ϕ theta λs kx kz
+λ_threshold = 0.0025
+
+
+clims = (0, 0.05)
+
+figid = 1
+ibw = 15
+bw = bws[ibw]
+λm = λs[ibw,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"B_{w}/B_0="*"$bw"*", "*L"CR="*"$(cr)"
+p1 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    # xlabel = "ψ [π]",
+    ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    left_margin=2mm,
+    bottom_margin=0mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+figid += 1
+ibw = 20
+bw = bws[ibw]
+λm = λs[ibw,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"B_{w}/B_0="*"$bw"*", "*L"CR="*"$(cr)"
+p2 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    # xlabel = "ψ [π]",
+    # ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    bottom_margin=0mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+figid += 1
+ibw = 30
+bw = bws[ibw]
+λm = λs[ibw,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"B_{w}/B_0="*"$bw"*", "*L"CR="*"$(cr)"
+p3 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    # xlabel = "ψ [π]",
+    # ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    bottom_margin=0mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+
+
+@load "data/singleParticle/chaosBorder_v.jld2" bw rs ϕ theta λs kx kz
+figid += 1
+iv = 6
+v = rs[iv]
+λm = λs[iv,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"v/v_A="*"$v"*", "*L"CR="*"$(cr)"
+p4 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    xlabel = "ψ [π]",
+    ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    left_margin=2mm,
+    bottom_margin=2mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+figid += 1
+iv = 8
+v = rs[iv]
+λm = λs[iv,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"v/v_A="*"$v"*", "*L"CR="*"$(cr)"
+p5 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    xlabel = "ψ [π]",
+    # ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    bottom_margin=2mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+figid += 1
+iv = 16
+v = rs[iv]
+λm = λs[iv,:,:]
+cr = sum(λm .> λ_threshold) / length(ϕ) / length(theta)
+cr = round(cr, digits=2)
+thetitle = L"v/v_A="*"$v"*", "*L"CR="*"$(cr)"
+p6 = heatmap(ϕ/pi, cos.(reverse(theta)), reverse(λm,dims=1), title = thetitle,
+    xlabel = "ψ [π]",
+    # ylabel = L"v_z/v",
+    xlims = (0, 2),
+    ylims = (-1, 1),
+    clims = clims,
+    color=:speed, grid = false,
+    framestyle = :box, legend=false, colorbar = false, 
+    bottom_margin=2mm,
+    aspect_ratio = 1,
+    # colorbar_title = "Lyapunov Exponent",
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left, :black)),
+)
+
+cbx = [0.,1.]
+cby = 0.:0.001:0.05
+cbz = repeat(cby, outer = (1,length(cbx)))
+cb1 = heatmap(cbx, cby, cbz,
+    color=:speed, grid = false, title = L"\lambda_{m}",
+    framestyle = :box, legend=false, colorbar = false, clims = (0, 0.05),
+    xlims = (0, 1.),ylims = (0, 0.05),
+    yticks = [], xticks=[],
+    top_margin = 1mm, bottom_margin = 2mm,
+    left_margin = 0mm, right_margin = 0mm,)
+cb1_2 = twinx(cb1)
+heatmap!(cb1_2,xlims = (0, 1.),ylims = (0, 0.05),
+yticks = [0.,0.01,0.02,0.03,0.04,0.05],)
+for (i,they) in enumerate([0.,0.01,0.02,0.03,0.04,0.05])
+    plot!(cb1, cbx, [they,they], color = :black, linewidth = 1.5)
+end
+
+l = @layout [grid(2, 3) a{0.025w}]
+plot(p1,p2,p3,p4,p5,p6,cb1, layout=l,
+dpi = 1200,
+size = (1000, 600),
+)
+
+savefig("figure/lyapunov_in_stateSpace.png")
+
+
+
+
 
 ###############################################################
-# 2.Single-particle magnetic moment and other time series
+# 3. fig3 Single-particle magnetic moment and other time series
 ###############################################################
 using Plots
 r=1;
@@ -228,7 +485,10 @@ Threads.@threads for i in 1:gyro_period_num
 end
 
 vperpGyro = sqrt.(1 .- vpGyro.^2) # 计算每个gyro period的平均垂直速度
-Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+
+# PF = k ./ sqrt.(kx^2 .+ (kz * (1 .- 1 ./bGyroNorm)).^2) # 计算每个gyro period的pitch factor
+PF = k ./ kx
+Reff = PF .* bGyroNorm.^2 ./ kz ./bw # 计算每个gyro period的有效曲率半径
 ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
 
 # 算一下拉雅普诺夫指数
@@ -259,7 +519,7 @@ p2 = plot(
     title = L"B_w/B_0="*"$bw, "*L"k_xv_A/\Omega_i="*"$kx, "*L"k_zv_A/\Omega_i="*"$kz",
     ylabel = L"v_{\parallel}/v_A",
     color = :black,
-    framestyle = :box,
+    framestyle = :semi,
     grid = false,
     label = :none,
     legend = :topright,
@@ -276,6 +536,21 @@ plot!(
     linewidth = 1.5,
     linestyle = :dash,
     label = L"v_{\parallel}=0",
+)
+p2_2 = twinx()
+plot!(p2_2, tGyro, vzGyro,
+    color = :green,
+    linewidth = 1.,
+    ylabel = L"v\cos\theta/v_A",
+    legend = false,
+    yguidefontcolor=:green,
+    framestyle = :semi,
+    grid = false,
+    foreground_color_axis = :green,
+    foreground_color_border = :green,
+    foreground_color_text = :green,
+    xlims = (0, t[end]),
+    ylims = (-1.,1.),
 )
 
 p3 = plot(
@@ -309,11 +584,11 @@ p4 = plot(
 plot!(
     p4,
     [0, t[end]],
-    [20, 20],
+    [25, 25],
     color = :black,
     linewidth = 1.5,
     linestyle = :dash,
-    label = L"P_{eff.}=20",
+    label = L"P_{eff.}=25",
 )
 p4_2 = twinx()
 plot!(p4_2, tGyro, λmeans,
@@ -336,10 +611,28 @@ plot(p2, p3, p1, p4,
     dpi = 1200,
     size = (800, 800),
 )
-savefig("figure/singleParticle/magneticMoment_2_1mark.png")
+savefig("figure/singleParticle/magneticMoment_2_2mark.png")
+
+############ vz figure ##########################
+p_vz = plot(
+    tGyro, vzGyro,
+    xlabel = "t "*L"~[1/\Omega_i]",
+    ylabel = L"v_{z}/v_A",
+    color = :black,
+    framestyle = :box,
+    grid = false,
+    label = :none,
+    legend = :topright,
+    # dpi = 1200,
+    xlims = (0, t[end]),
+    ylims = (-1, 1.),
+)
+
+
+
 
 #############################################################
-# 3. fig3(a) Magnetic moment change and effective relative curvature radius under different initial states
+# 4. fig4a Magnetic moment change and effective relative curvature radius under different initial states
 ##############################################################
 
 r=1;
@@ -425,7 +718,9 @@ end
 
 vperpGyro = sqrt.(1 .- vpGyro.^2) # 计算每个gyro period的平均垂直速度
 # Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
-Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+# PF = k ./ sqrt.(kx^2 .+ (kz * (1 .- 1 ./bGyroNorm)).^2) # 计算每个gyro period的pitch factor
+PF = k ./ kx
+Reff = PF .* bGyroNorm.^2 ./ kz ./bw # 计算每个gyro period的有效曲率半径
 # Reff = k^2 * bGyroNorm.^2 ./ kz ./ kx # 计算每个gyro period的有效曲率半径
 # Reff = bGyroNorm.^3 ./ kz ./bw
 # Reff = bGyroNorm.^2 ./ kz ./bw
@@ -442,33 +737,124 @@ scatter!(p,
     markerstrokestyle = :none,
     label=:none,
 )
-# 从0-100分成100份，计算每个区间内的平均值
 
-# bin_means = zeros(length(bin_centers))
-# # bin_counts = zeros(length(bin_centers))
-# # bin_middles = zeros(length(bin_centers))
-# bin_stds = zeros(length(bin_centers))
-# for i in 1:20
-#     bin_indices = findall((bins[i] .<= Reff[2:end-1]) .& (Reff[2:end-1] .< bins[i+1]))
-#     # bin_indices = findall((bins[i] .<= Reff[2:end-1]./bw) .& (Reff[2:end-1]./bw .< bins[i+1]))
-#     bin_means[i] = mean(ΔμGyro[bin_indices])
-#     # bin_counts[i] = length(bin_indices)
-#     if !isempty(bin_indices)
-#         # bin_middles[i] = middle(ΔμGyro[bin_indices])
-#         bin_stds[i] = std(ΔμGyro[bin_indices],mean=bin_means[i])
-#     else
-#         bin_stds[i] = NaN
-#         # bin_middles[i] = NaN
-#     end
-# end
-# ΔμGyro_means[:,u_i] = bin_means
-# ΔμGyro_stds[:,u_i] = bin_stds
 @info "Finished u0 $u_i "
 end
 savefig(p, "figure/singleParticle/dmu/dmu_final_1.png")
 #################################################################
-# 3. fig3(b) Particle Trajectory
+# 4. fig4bc Particle Trajectory
 #################################################################
+
+r=1;
+theta = π
+phi = 0
+ϕ = 0 # Initial phase
+Δt = 2pi/250
+# T = 2pi*10+Δt # for 0.6
+# Ttr = 2pi*110
+# T = 2pi*10+Δt # for 0.5
+# Ttr = 2pi*78
+# T = 2pi*10+Δt # for 0.5——2
+# Ttr = 2pi*100
+T = 2pi*100+Δt # for 0.5——3
+Ttr = 2pi*60
+# T = 2pi*10+Δt # for 0.3
+# Ttr = 0
+# T = 2pi*100+Δt
+# Ttr = 0
+
+bw = 0.5 # Base Bw
+kx = 0.5 # Base kx
+kz = 0.05 # Base kz
+k = sqrt(kx^2 + kz^2) # 计算k的模
+
+u0 = [ϕ, r*sin(theta)*cos(phi),
+      r*sin(theta)*sin(phi), r*cos(theta),pi/kx,0,pi/kz]# ψ x y z
+p0 =  [bw, kx, kz] # Parameters bw kx kz
+
+cpaw = CoupledODEs(cpaw_rule_with_xyz, u0, p0;diffeq) #L1
+step!(cpaw, Ttr, true) # 先走一段时间，避免暂态过程影响
+start_state = Vector(current_state(cpaw))
+X, t = trajectory(cpaw, T; Δt = Δt);
+X = Matrix(X) # Convert to matrix for easier manipulation
+start_state1 = deepcopy(start_state)
+start_state1[2] = start_state[2] + 5e-2
+start_state1[3] = start_state[3] + 5e-2
+start_state1[4] = sign(start_state[4])*sqrt(1 - start_state1[2]^2 - start_state1[3]^2) # 使得初始速度的模为1
+X1, _ = trajectory(cpaw, T, start_state1; Δt = Δt);
+X1 = Matrix(X1) # Convert to matrix for easier manipulation
+start_state2 = deepcopy(start_state)
+start_state2[2] = start_state[2] + 5e-2
+start_state2[3] = start_state[3] - 5e-2
+start_state2[4] = sign(start_state[4])*sqrt(1 - start_state2[2]^2 - start_state2[3]^2) # 使得初始速度的模为1
+X2, _ = trajectory(cpaw, T, start_state2; Δt = Δt);
+X2 = Matrix(X2) # Convert to matrix for easier manipulation
+start_state3 = deepcopy(start_state)
+start_state3[2] = start_state[2] - 5e-2
+start_state3[3] = start_state[3] + 5e-2
+start_state3[4] = sign(start_state[4])*sqrt(1 - start_state3[2]^2 - start_state3[3]^2) # 使得初始速度的模为1
+X3, _ = trajectory(cpaw, T, start_state3; Δt = Δt);
+X3 = Matrix(X3) # Convert to matrix for easier manipulation
+start_state4 = deepcopy(start_state)
+start_state4[2] = start_state[2] - 5e-2
+start_state4[3] = start_state[3] - 5e-2
+start_state4[4] = sign(start_state[4])*sqrt(1 - start_state4[2]^2 - start_state4[3]^2) # 使得初始速度的模为1
+X4, _ = trajectory(cpaw, T, start_state4; Δt = Δt);
+X4 = Matrix(X4) # Convert to matrix for easier manipulation
+start_state5 = deepcopy(start_state)
+start_state5[2] = start_state[2] + 1e-1
+start_state5[3] = start_state[3]
+start_state5[4] = sign(start_state[4])*sqrt(1 - start_state5[2]^2 - start_state5[3]^2) # 使得初始速度的模为1
+X5, _ = trajectory(cpaw, T, start_state5; Δt = Δt);
+X5 = Matrix(X5) # Convert to matrix for easier manipulation
+start_state6 = deepcopy(start_state)
+start_state6[2] = start_state[2] - 1e-1
+start_state6[3] = start_state[3]
+start_state6[4] = sign(start_state[4])*sqrt(1 - start_state6[2]^2 - start_state6[3]^2) # 使得初始速度的模为1
+X6, _ = trajectory(cpaw, T, start_state6; Δt = Δt);
+X6 = Matrix(X6) # Convert to matrix for easier manipulation
+start_state7 = deepcopy(start_state)
+start_state7[2] = start_state[2]
+start_state7[3] = start_state[3] + 1e-1
+start_state7[4] = sign(start_state[4])*sqrt(1 - start_state7[2]^2 - start_state7[3]^2) # 使得初始速度的模为1
+X7, _ = trajectory(cpaw, T, start_state7; Δt = Δt);
+X7 = Matrix(X7) # Convert to matrix for easier manipulation
+start_state8 = deepcopy(start_state)
+start_state8[2] = start_state[2]
+start_state8[3] = start_state[3] - 1e-1
+start_state8[4] = sign(start_state[4])*sqrt(1 - start_state8[2]^2 - start_state8[3]^2) # 使得初始速度的模为1
+X8, _ = trajectory(cpaw, T, start_state8; Δt = Δt);
+X8 = Matrix(X8) # Convert to matrix for easier manipulation
+
+
+# bs = B_cpaw(X[:,1], p0) # 计算磁场
+# bNorms = vec(sqrt.(sum(abs2, bs[:, 1:3], dims=2))) # 计算磁场的模
+# v_parallel = vec( sum(X[:, 2:4] .* bs[:, 1:3], dims=2) ./ bNorms )# 计算平行速度
+# μGyro = 0.5 * (1 .- v_parallel.^2) ./ bNorms # 计算磁矩
+
+# gyro_period_n = Int(round(2pi / Δt ))
+# gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+# tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+# gyro_period_num = length(gyro_period_start)
+# μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+# μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+# μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+# bGyro = zeros(gyro_period_num, 3) # 存储每个gyro period的平均磁场
+# Threads.@threads for i in 1:gyro_period_num
+#     start = gyro_period_start[i]
+#     end_ = min(start + gyro_period_n - 1, length(t))
+#     thebGyro = vec(mean(bs[start:end_, :], dims=1))
+#     bGyro[i, :] = thebGyro
+#     for j in 1:gyro_period_n
+#         v_parallel = dot(vec(X[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+#         μx[i] += X[start+j-1, 5] / gyro_period_n
+#         μy[i] += X[start+j-1, 6] / gyro_period_n
+#         μz[i] += X[start+j-1, 7] / gyro_period_n
+#     end
+# end
+
+
+
 using GLMakie
 GLMakie.activate!()
 the_title = L"k_xv_A/\Omega_i=0.5,~ k_zv_A/\Omega_i=0.05,~ B_w/B_0=0.5"
@@ -503,46 +889,307 @@ GLMakie.lines!(ax1,
     X[:,5], X[:,6], X[:,7],
     color = :black,
 )
+bs = B_cpaw(X[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X[start+j-1, 5] / gyro_period_n
+        μy[i] += X[start+j-1, 6] / gyro_period_n
+        μz[i] += X[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X1[:,5], X1[:,6], X1[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X1[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X1[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X1[start+j-1, 5] / gyro_period_n
+        μy[i] += X1[start+j-1, 6] / gyro_period_n
+        μz[i] += X1[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X2[:,5], X2[:,6], X2[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X2[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X2[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X2[start+j-1, 5] / gyro_period_n
+        μy[i] += X2[start+j-1, 6] / gyro_period_n
+        μz[i] += X2[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X3[:,5], X3[:,6], X3[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X3[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X3[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X3[start+j-1, 5] / gyro_period_n
+        μy[i] += X3[start+j-1, 6] / gyro_period_n
+        μz[i] += X3[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X4[:,5], X4[:,6], X4[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X4[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X4[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X4[start+j-1, 5] / gyro_period_n
+        μy[i] += X4[start+j-1, 6] / gyro_period_n
+        μz[i] += X4[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X5[:,5], X5[:,6], X5[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X5[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X5[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X5[start+j-1, 5] / gyro_period_n
+        μy[i] += X5[start+j-1, 6] / gyro_period_n
+        μz[i] += X5[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X6[:,5], X6[:,6], X6[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X6[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X6[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X6[start+j-1, 5] / gyro_period_n
+        μy[i] += X6[start+j-1, 6] / gyro_period_n
+        μz[i] += X6[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X7[:,5], X7[:,6], X7[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X7[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X7[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X7[start+j-1, 5] / gyro_period_n
+        μy[i] += X7[start+j-1, 6] / gyro_period_n
+        μz[i] += X7[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 GLMakie.lines!(ax1, 
     X8[:,5], X8[:,6], X8[:,7],
     color = :black,
     # linestyle = :dash,
 )
+bs = B_cpaw(X8[:,1], p0) # 计算磁场
+gyro_period_n = Int(round(2pi / Δt ))
+gyro_period_start = 1:gyro_period_n:(length(t)-gyro_period_n)
+tGyro = t[gyro_period_start] .+ pi # 计算每个gyro period的中心时间
+gyro_period_num = length(gyro_period_start)
+μx = zeros(gyro_period_num) # 存储回旋周期的x坐标
+μy = zeros(gyro_period_num) # 存储回旋周期的y坐标
+μz = zeros(gyro_period_num) # 存储回旋周期的z坐
+vparaGyro = zeros(gyro_period_num)
+bGyroNorm = zeros(gyro_period_num) # 存储每个gyro period的平均磁场模
+# vperpGyro = zeros(gyro_period_num) # 存储每个gyro period的平均垂直速度
+Threads.@threads for i in 1:gyro_period_num
+    start = gyro_period_start[i]
+    end_ = min(start + gyro_period_n - 1, length(t))
+    thebGyro = vec(mean(bs[start:end_, :], dims=1))
+    bGyroNorm[i] = norm(thebGyro)
+    for j in 1:gyro_period_n
+        v_parallel = dot(vec(X8[start+j-1, 2:4]), thebGyro) / norm(thebGyro)
+        vparaGyro[i] += v_parallel / gyro_period_n  
+        μx[i] += X8[start+j-1, 5] / gyro_period_n
+        μy[i] += X8[start+j-1, 6] / gyro_period_n
+        μz[i] += X8[start+j-1, 7] / gyro_period_n
+    end
+end
+vperpGyro = sqrt.(1 .- vparaGyro.^2) # 计算每个gyro period的平均垂直速度
+Reff = k * bGyroNorm.^2 ./ kz ./bw ./ kx # 计算每个gyro period的有效曲率半径
+ρ = vperpGyro ./ bGyroNorm # 计算每个gyro period的回旋半径
+Peff = Reff ./ ρ
+scatter!(ax1, μx[Peff.<25], μy[Peff.<25], μz[Peff.<25], color = :blue, markersize=12)
 
 u0s = [
     [μx[i], μy[i], μz[i]] for i in [2,]
@@ -617,7 +1264,7 @@ fig
 inch = 96
 save("figure/singleParticle/magFieldLineSwitch05_3.png",fig,px_per_unit = 300/inch)
 #################################################################
-# 4. cr in a two-dimensional parameter space and determine the chaos border
+# 5. fig5 cr in a two-dimensional parameter space and determine the chaos border
 #################################################################
 # change kz to calculate cr for kz=0.1, 0.25, 0.5
 using Plots
@@ -666,10 +1313,11 @@ end
 ########################################################################
 
 cr_level = 0.01
-C = 20
+C = 25
 figid = 1
+λ_threshold = 0.0025
 @load "data/coldPlasma/lyapunov_bw_kx_kz01.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 p1 = heatmap(
     kxs, bws, cr,
     xlabel = L"k_xv_A/\Omega_i",
@@ -712,7 +1360,7 @@ plot!(p1_2,[1.2,1.3],[1.2,1.3], label=L"P_{eff.}^m="*"$C", color = :red, linewid
 
 figid += 1
 @load "data/coldPlasma/lyapunov_bw_kx_kz025.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 p2 = heatmap(
     kxs, bws, cr,
     xlabel = L"k_xv_A/\Omega_i",
@@ -753,7 +1401,7 @@ plot!(p2_2,[1.2,1.3],[1.2,1.3], label=L"P_{eff.}^m="*"$C", color = :red, linewid
 
 figid += 1
 @load "data/coldPlasma/lyapunov_bw_kx_kz05.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 p3 = heatmap(
     kxs, bws, cr,
     xlabel = L"k_xv_A/\Omega_i",
@@ -794,7 +1442,7 @@ plot!(p3_2,[1.2,1.3],[1.2,1.3], label=L"P_{eff.}^m="*"$C", color = :red, linewid
 
 figid += 1
 @load "data/coldPlasma/lyapunov_bw_kx_kz01.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 p4 = contour(kxs, bws, cr, levels = [cr_level], color = :black, linewidth = 1.5, label = "ω=0.1", linestyle = :dash,
     legend = :bottomright, clabels=false, cbar= false,
     minorgrid = true,framestyle = :box,
@@ -811,11 +1459,11 @@ p4 = contour(kxs, bws, cr, levels = [cr_level], color = :black, linewidth = 1.5,
     annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left)),
 )
 @load "data/coldPlasma/lyapunov_bw_kx_kz025.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 contour!(kxs, bws, cr, levels = [0.05], color = :red, linewidth = 1.5, label = "ω=0.25", linestyle = :dash,
     legend = :bottomright, clabels=false,cbar= false,)
 @load "data/coldPlasma/lyapunov_bw_kx_kz05.jld2"
-cr = dropdims(mean(λs.>0.01, dims=3),dims=3)
+cr = dropdims(mean(λs.>λ_threshold, dims=3),dims=3)
 contour!(kxs, bws, cr, levels = [0.05], color = :blue, linewidth = 1.5, label = "ω=0.5", linestyle = :dash,
     legend = :bottomright, clabels=false,cbar= false,)
 plot!([1.2,1.3],[1.2,1.3], label=L"k_zv_A/\Omega_i=0.1", color = :black, linewidth = 1.5, linestyle = :dash, legend=:topright)
@@ -844,3 +1492,169 @@ plot(p1,p2,p3,p4,cb3, layout=l,
 dpi = 1200,
 size = (700, 680),
 )
+
+################################################################
+@load "data/coldPlasma/lyapunov_bw_kx_kz01_testLargeBw.jld2"
+cr = dropdims(mean(λs.>0.0025, dims=3),dims=3)
+figid = 1
+p1 = heatmap(
+    kxs[1:50], bws, cr[:,1:50],
+    xlabel = L"k_xv_A/\Omega_i",
+    ylabel = L"B_w/B_0",
+    # xlims = (0, 0.4),
+    # ylims = (0, 0.6),
+    # aspect_ratio = 0.67,
+    xlims = (0., 1.),
+    ylims = (0., 4.),
+    aspect_ratio = .5,
+    title = "CR",
+    colorbar = true,
+    c=:speed,
+    clims = (0, 1),
+    # cbar_title = "Lyapunov",
+    # cbar_ticks = (-0.5, 0, 0.5),
+    dpi = 1200,
+    framestyle = :box,
+    legend = :bottomright,
+    # grid = false,
+    top_margin = 0mm,
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left)),
+)
+bws = 0.:0.01:4.
+kxs = 0.:0.01:1.
+BWS = repeat(bws, outer=(1,length(kxs)))
+KXS = repeat(kxs', outer=(length(bws), 1))
+C=25
+kz = 0.1
+R = rMin(BWS, KXS, kz)
+Btm, Btp = threshold_curve(kxs, kz, 20)
+figid += 1
+p2 = heatmap(kxs, bws, R,
+    xlabel = L"k_xv_A/\Omega_i",
+    ylabel = L"B_w/B_0",
+    title = L"P^{m}_{eff.}, \,\,k_zv_A/\Omega_i="*"$kz",
+    color = :rainbow,
+    framestyle = :box,
+    aspect_ratio = 0.5,
+    grid = false,
+    legend = false,
+    colorbar = true,
+    clims = (10, 30),
+    # cscale = :log10,
+    xlims = (0, 1),
+    ylims = (0, 4),
+    top_margin = 0mm,
+    annotation = ((0.02, 0.98), text(figIds[figid], 12, :top, :left)),
+)
+plot(p1, p2,
+    layout = (1,2),
+    size = (600, 450),
+    dpi = 1200,
+)
+savefig("figure/coldPlasma/chaosRatio_bw_kx_kz01_allAngle_largeBw.png")
+
+
+#################################################################
+# 6. fig6 CR and Peff in Bw-kx space for kz=0.1
+#################################################################
+using Plots
+using Plots.PlotMeasures
+r=1;
+theta = range(0., pi, length=40); # Initial phase
+phi = 0
+# ϕ = 2π*rand(100) # Initial phase
+Nϕ = 100
+ϕ = range(0., 2*pi, length=Nϕ); # Initial phase
+# regularity_T = 2000
+# gali_threshold = 5e-12
+# chaos_threshold = 0.99
+lyapunov_T = 10000
+Ttr = 100
+kz=0.1 # Base kz
+
+# u0s = [[ϕi, r*sin(theta)*cos(phi),
+#       r*sin(theta)*sin(phi), r*cos(theta)] for ϕi in ϕ] # ψ x y z
+u0s = [[ϕi, r*sin(thetai)*cos(phi),
+      r*sin(thetai)*sin(phi), r*cos(thetai)] for ϕi in ϕ for thetai in theta] # ψ x y z
+p0 =  [0.2, 0.5, kz] # Parameters bw kx kz
+cpaw = CoupledODEs(cpaw_rule, u0s[1], p0; diffeq)
+
+# bws = range(0., 1., length=150); # 画图用
+# kxs = range(0., 1., length=150); 
+bws = range(0., 4., length=100); # 测试用
+kxs = range(0., 2., length=100);
+# cr = zeros(length(bws), length(kxs))
+λs = zeros(length(bws), length(kxs),length(u0s)) # 最大Lyapunov指数
+# Since `DynamicalSystem`s are mutable, we need to copy to parallelize
+systems = [deepcopy(cpaw) for _ in 1:Threads.nthreads()-1]
+pushfirst!(systems, cpaw)
+@info "Starting calculation kz=$kz"
+for i in eachindex(bws)
+    for j in eachindex(kxs)
+            Threads.@threads for u_i in eachindex(u0s)
+                system = systems[Threads.threadid()]
+                set_parameter!(system, 1, bws[i])
+                set_parameter!(system, 2, kxs[j])
+                λs[i,j,u_i] = lyapunov(system, lyapunov_T; Ttr = Ttr, u0=u0s[u_i])
+            end
+    end
+@info "Finished bwi=$i"
+end
+
+# Save the results
+@save "data/coldPlasma/lyapunov_bw_kx_kz01_testLargeBw.jld2" bws kxs λs
+
+@load "data/coldPlasma/lyapunov_bw_kx_kz01_testLargeBw.jld2"
+cr = dropdims(mean(λs.>0.0025, dims=3),dims=3)
+p1 = heatmap(
+    kxs[1:50], bws, cr[:,1:50],
+    xlabel = L"k_xv_A/\Omega_i",
+    ylabel = L"B_w/B_0",
+    # xlims = (0, 0.4),
+    # ylims = (0, 0.6),
+    # aspect_ratio = 0.67,
+    xlims = (0., 1.),
+    ylims = (0., 4.),
+    aspect_ratio = .5,
+    title = "CR",
+    colorbar = true,
+    c=:speed,
+    clims = (0, 1),
+    # cbar_title = "Lyapunov",
+    # cbar_ticks = (-0.5, 0, 0.5),
+    dpi = 1200,
+    framestyle = :box,
+    legend = :bottomright,
+    # grid = false,
+    top_margin = 0mm
+)
+bws = 0.:0.01:4.
+kxs = 0.:0.01:1.
+BWS = repeat(bws, outer=(1,length(kxs)))
+KXS = repeat(kxs', outer=(length(bws), 1))
+C=25
+kz = 0.1
+R = rMin(BWS, KXS, kz)
+Btm, Btp = threshold_curve(kxs, kz, 20)
+p2 = heatmap(kxs, bws, R,
+    xlabel = L"k_xv_A/\Omega_i",
+    ylabel = L"B_w/B_0",
+    title = L"P^{m}_{eff.}, \,\,k_zv_A/\Omega_i="*"$kz",
+    color = :rainbow,
+    framestyle = :box,
+    aspect_ratio = 0.5,
+    grid = false,
+    legend = false,
+    colorbar = true,
+    clims = (10, 30),
+    # cscale = :log10,
+    xlims = (0, 1),
+    ylims = (0, 4),
+    top_margin = 0mm
+)
+plot(p1, p2,
+    layout = (1,2),
+    size = (600, 450),
+    dpi = 1200,
+)
+savefig("figure/coldPlasma/chaosRatio_bw_kx_kz01_allAngle_largeBw.png")
